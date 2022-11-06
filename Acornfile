@@ -1,0 +1,199 @@
+containers: {
+  icinga: {
+    image: "dbodky/icinga2-poc:0.0.7"
+    ports: publish: "icinga:5665/http"
+    dependsOn: [ "icinga-database", "icingadb" ]
+    probes: {}
+    env: {
+      ICINGA_NODENAME: "icinga"
+      ICINGA_CA_ENABLE: "true"
+      ICINGA_CA_TICKET_SALT: "secret://icinga-ticket-salt/token"
+      ICINGA_DB_ENABLE: "true"
+      ICINGA_DB_HOST: "redis"
+      ICINGA_DB_PORT: "6379"
+      ICINGA_DB_PASSWORD: "secret://icinga-redis/token"
+      ICINGA_FEATURE_API: "true"
+      ICINGA_FEATURE_API_USER: "icinga"
+      ICINGA_FEATURE_API_PASSWORD: "secret://icinga-api/token"
+    }
+  }
+  icingadb: {
+    image: "icinga/icingadb:1.0.0"
+    dependsOn: [ "redis", "icinga-database" ]
+    env: {
+        ICINGADB_REDIS_HOST: "redis"
+        ICINGADB_REDIS_PORT: "6379"
+        ICINGADB_REDIS_PASSWORD: "secret://icinga-redis/token"
+        ICINGADB_DATABASE_HOST: "database"
+        ICINGADB_DATABASE_USER: "icingadb"
+        ICINGADB_DATABASE_PASSWORD: "secret://icinga-db/token"
+        ICINGADB_DATABASE_DATABASE: "icingadb"
+        ICINGADB_DATABASE_PORT: "3306"
+    }
+  }
+  default: {
+    image: "icinga/icingaweb2:2.11.1"
+    ports: publish: "default:8080/http"
+    dependsOn: [ "icinga" ]
+    dirs: "/data": "volume://icingaweb"
+    env: {
+      icingaweb_passwords_icingaweb2_admin: "secret://icinga-web-admin/token"
+      icingaweb_authentication_icingaweb2_backend: "db"
+      icingaweb_authentication_icingaweb2_resource: "icingawebdb"
+      icingaweb_config_global_config_backend: "db"
+      icingaweb_config_global_config_resource: "icingawebdb"
+      icingaweb_config_logging_log: "php"
+      icingaweb_groups_icingaweb2_backend: "db"
+      icingaweb_groups_icingaweb2_resource: "icingawebdb"
+      icingaweb_enabledModules: "icingadb, director, incubator"
+      icingaweb_modules_icingadb_config_icingadb_resource: "icingadb"
+      icingaweb_modules_icingadb_redis_redis1_host: "redis"
+      icingaweb_modules_icingadb_redis_redis1_port: "6379"
+      icingaweb_modules_icingadb_redis_redis1_password: "secret://icinga-redis/token"
+      icingaweb_modules_icingadb_commandtransports_icinga2_transport: "api"
+      icingaweb_modules_icingadb_commandtransports_icinga2_host: "icinga"
+      icingaweb_modules_icingadb_commandtransports_icinga2_username: "icinga"
+      icingaweb_modules_icingadb_commandtransports_icinga2_password: "secret://icinga-api/token"
+      icingaweb_resources_icingadb_type: "db"
+      icingaweb_resources_icingadb_db: "mysql"
+      icingaweb_resources_icingadb_host: "database"
+      icingaweb_resources_icingadb_dbname: "icingadb"
+      icingaweb_resources_icingadb_username: "icingadb"
+      icingaweb_resources_icingadb_password: "secret://icinga-db/token"
+      icingaweb_resources_icingadb_charset: "utf8mb4"
+      icingaweb_resources_icingawebdb_type: "db"
+      icingaweb_resources_icingawebdb_db: "mysql"
+      icingaweb_resources_icingawebdb_host: "database"
+      icingaweb_resources_icingawebdb_dbname: "icingaweb"
+      icingaweb_resources_icingawebdb_username: "icingaweb"
+      icingaweb_resources_icingawebdb_password: "secret://icinga-web/token"
+      icingaweb_resources_icingawebdb_charset: "utf8mb4"
+      icingaweb_roles_Administrators_users: "admin"
+      icingaweb_roles_Administrators_permissions: "*"
+      icingaweb_roles_Administrators_groups: "Administrators"
+      icingaweb_modules_director_config_db_resource: "directordb"
+      icingaweb_modules_director_kickstart_config_endpoint: "icinga"
+      icingaweb_modules_director_kickstart_config_host: "icinga"
+      icingaweb_modules_director_kickstart_config_port: "5665"
+      icingaweb_modules_director_kickstart_config_username: "icinga"
+      icingaweb_modules_director_kickstart_config_password: "secret://icinga-api/token"
+      icingaweb_resources_directordb_charset: "utf8mb4"
+      icingaweb_resources_directordb_db: "mysql"
+      icingaweb_resources_directordb_dbname: "director"
+      icingaweb_resources_directordb_host: "database"
+      icingaweb_resources_directordb_password: "secret://icinga-director/token"
+      icingaweb_resources_directordb_type: "db"
+      icingaweb_resources_directordb_username: "director"
+    }
+    sidecars: {
+      "icinga-director": {
+        image: "icinga/icingaweb2:2.11.1"
+        entrypoint: []
+        dirs: "/data": "volume://icingaweb"
+        cmd: [
+          "/bin/bash",
+          "-ce",
+          """
+          echo "Sleep 10 seconds to ensure Icingaweb2 is running"
+          sleep 10
+          echo "Testing the database connection. Container could restart."
+          (echo > /dev/tcp/database/3306) > /dev/null 2>&1
+          echo "Testing the Icinga2 API connection. Container could restart."
+          (echo > /dev/tcp/icinga/5665) > /dev/null 2>&1
+          icingacli director migration run
+          (icingacli director kickstart required && icingacli director kickstart run && icingacli director config deploy) || true
+          echo "Starting Icinga Director daemon."
+          icingacli director daemon run  
+          """
+        ]
+        dependsOn: [ "icinga", "default" ]
+      }
+      bootstrapper: {
+        init: true
+        image: "alpine:3.16.2"
+        dirs: "/data": "volume://icingaweb"
+        entrypoint: [
+          "/bin/sh",
+          "-ce",
+          """
+          chown -R 33:33 /data
+          chmod -R 0755 /data
+          """
+        ]
+      }
+    }
+  }
+  redis: {
+    image: "redis:5.0.7-alpine3.11"
+    ports: "redis:6379/tcp"
+    env: {
+      REDIS_PASSWORD: "secret://icinga-redis/token"
+    }
+    cmd: ["redis-server", "--requirepass", "$(REDIS_PASSWORD)"]
+  }
+  "icinga-database": {
+    image: "mariadb:10.3.9"
+    ports: "database:3306/tcp"
+    env: {
+      MYSQL_ROOT_PASSWORD: "secret://icinga-database-root/token"
+      DIRECTOR_PASSWORD: "secret://icinga-director/token"
+      ICINGADB_PASSWORD: "secret://icinga-db/token"
+      ICINGAWEB_PASSWORD: "secret://icinga-web/token"
+    }
+    files: "/docker-entrypoint-initdb.d/bootstrap-db.sh": """
+      #!/bin/sh -x 
+      create_database_and_user() {
+        DATABASE=$1
+        USERNAME=$2
+        PASSWORD=$3
+
+        mysql --user root --password=$MYSQL_ROOT_PASSWORD << EOS
+      CREATE DATABASE IF NOT EXISTS ${DATABASE};
+      CREATE USER IF NOT EXISTS '${USERNAME}'@'%' IDENTIFIED BY '${PASSWORD}';
+      GRANT ALL ON ${DATABASE}.* TO '${USERNAME}'@'%';
+      EOS
+      }
+
+      create_database_and_user director director ${DIRECTOR_PASSWORD}
+      create_database_and_user icingadb icingadb ${ICINGADB_PASSWORD}
+      create_database_and_user icingaweb icingaweb ${ICINGAWEB_PASSWORD}
+      """
+    dirs: "/var/lib/mysql": "volume://icinga-database"
+  }
+}
+
+jobs: {
+  "populate-icinga": {
+    build: context: "icinga-api-bootstrap"
+    env: {
+      ICINGA_USERNAME: "icinga"
+      ICINGA_PASSWORD: "secret://icinga-api/token"
+      ICINGA_URL: "icinga"
+    }
+    dependsOn: [ "icinga" ]
+  }
+}
+
+localData: {
+    tokens: [ "database-root","director", "db", "web", "ticket-salt", "api", "redis", "web-admin" ]
+}
+
+secrets: {
+  for t in localData.tokens {
+    "icinga-\(t)": {
+        type: "token"
+        data: token: ""
+    }
+  }
+}
+
+volumes: {
+  "icinga-database": {
+    size: "20G"
+    accessModes: "readWriteOnce"
+  }
+  "icingaweb": {
+    size: "10G"
+    accessModes: "readWriteOnce"
+  }
+}

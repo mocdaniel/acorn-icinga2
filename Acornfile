@@ -1,7 +1,7 @@
 containers: {
   icinga: {
     image: "dbodky/icinga2-poc:0.0.7"
-    ports: publish: "icinga:5665/http"
+    ports: "icinga:5665/http"
     dependsOn: [ "icinga-database", "icingadb" ]
     probes: {}
     env: {
